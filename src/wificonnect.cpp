@@ -12,9 +12,9 @@ void wificonnect(const char* ssid, const char* password, const char* deviceName,
     IPAddress secondaryDNS(1, 0, 0, 1); //optional
     
     // Configures static IP address ----------------------
-    if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
-        Serial.println("STA Failed to configure");
-    }
+    // if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+    //     Serial.println("STA Failed to configure");
+    // }
 
     // Mengatur WiFi -----------------------
     Serial.println();
