@@ -4,6 +4,7 @@
 #include <WiFiUdp.h>
 #include <CTBot.h>
 
+#include "gettimesetting.h"
 #include "wificonnect.h"
 
 /* WIFI SSID & Password */
@@ -12,24 +13,33 @@ const char* password;  //Enter Password here
 const char* deviceName;
 
 /*  GPIO SETUP */
-// Initialize Internal led build in
-uint8_t connled = 2;
-uint8_t saklar = 13;
-uint8_t secIndicator = 12;
+// Init pin number on ESP8266 board
+#define connled 2
+#define saklar 13
+#define secIndicator 12
+
+// Init pin number on ESP01 board
+// #define buzz 1 //TX
+// #define saklar 3 // RX / Saklar
+// #define connled 0
+// #define secIndicator 2
 
 /*  NTP SETUP */
 // Iniotialize NTP Class
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org");
 
-// Setel waktu alarm ( 2 waktu sekaligus )
-uint8_t jamTimer[][2] = {{9, 11},{17, 20}};   
+  uint8_t waktu1Awal;
+  uint8_t waktu1Akhir;
+  
+  uint8_t waktu2Awal;
+  uint8_t waktu2Akhir;
 
 // Clock variable
 unsigned long timeLast = 0;
 unsigned long previousMillis = 0;
-unsigned long intervalDays = 2*24*60*60*1000; // 2 Days interval
-uint8_t intervalSec = 5; // 2 Days interval
+const unsigned long intervalDays = 2*24*60*60*1000; // 2 Days interval
+uint8_t const intervalSec = 5; // 2 Days interval
 
 // set your starting hour here, not below at int hour. This ensures accurate daily correction of time
 uint8_t seconds;
@@ -47,12 +57,12 @@ CTBotInlineKeyboard myKbd;   // reply keyboard object helper
 #define LIGHT_ON_CALLBACK  "ON1"  // callback data sent when "LIGHT ON" button is pressed
 #define LIGHT_OFF_CALLBACK "OFF1" // callback data sent when "LIGHT OFF" button is pressed 
 
-// Make variable prototype
-void updateTime(unsigned long &currentMillis);
-void showTime(unsigned long &currentMillis);
-void clockCounter(unsigned long &currentMillis);
+// Make function prototype
+void updateTime(unsigned long currentMillis);
+void showTime(unsigned long currentMillis);
+void clockCounter(unsigned long currentMillis);
 void timerFunction();
-void telegramOperation(unsigned long &currentTime);
+void telegramOperation(unsigned long currentTime);
 void telegramKeyboard();
 
 
@@ -72,6 +82,27 @@ void setup() {
   wificonnect(ssid, password, deviceName, connled);
 
   Serial.println(WiFi.gatewayIP());
+
+  	// Initialize filesystem -----------------------
+	if(!LittleFS.begin()){
+		Serial.println("An Error has occurred while mounting LittleFS");
+		return;
+	}
+
+	// Testing filesystem -----------------------
+	File file = LittleFS.open("time.csv", "r");
+	if(!file){
+		Serial.println("Failed to open file for reading");
+		return;
+	}
+	Serial.println("File Content:");
+	while(file.available()){
+		Serial.write(file.read());
+	}
+	file.close();
+
+  // Get time setting from filesystem -----------------------
+	getTimesetting(waktu1Awal, waktu2Awal, waktu1Akhir, waktu2Akhir);
 
 	//  Connecting to telegram -----------------------
 	myBot.setTelegramToken(token);
@@ -111,11 +142,9 @@ void loop() {
   updateTime(currentMillis);
   showTime(currentMillis);
   timerFunction();
-
-  
 }
 
-void updateTime(unsigned long &currentMillis) {
+void updateTime(unsigned long currentMillis) {
   // update waktu ke server NTP
   if (currentMillis - timeLast >= intervalDays) {
     timeLast = currentMillis;
@@ -127,7 +156,7 @@ void updateTime(unsigned long &currentMillis) {
   }
 }
 
-void showTime(unsigned long &currentMillis) {
+void showTime(unsigned long currentMillis) {
   if (currentMillis - timeLast >= intervalSec) {
     timeLast = currentMillis;
 
@@ -152,7 +181,7 @@ void showTime(unsigned long &currentMillis) {
   }
 }
 
-void clockCounter(unsigned long &currentMillis) {
+void clockCounter(unsigned long currentMillis) {
   seconds = currentMillis - previousMillis;
 
   //the number of seconds that have passed since the last time 60 seconds was reached.
@@ -177,16 +206,16 @@ void clockCounter(unsigned long &currentMillis) {
 void timerFunction() {
   // Fungsi timer utama
   for (int i=0; i<2; i++) {
-    if(hours >= jamTimer[i][0] && hours <= jamTimer[i][1]-1) {
-      // Serial.println("Alarm aktif");
-        digitalWrite(saklar, HIGH);
-      } else {
+    if((hours >= waktu1Awal && hours <= waktu1Akhir-1) || (hours >= waktu2Awal && hours <= waktu2Akhir-1)) {
+      // MEnggunakan Relay NORMALLY CLOSED, jadi waktu nyala akan putus dan waktu mati akan nyambung
         digitalWrite(saklar, LOW);
+      } else {
+        digitalWrite(saklar, HIGH);
     }
   }
 }
 
-void telegramOperation(unsigned long &currentMillis) {
+void telegramOperation(unsigned long currentMillis) {
 	TBMessage msg;
 
 	// 3 Relay switch
@@ -200,10 +229,6 @@ void telegramOperation(unsigned long &currentMillis) {
   String hoursStr = String(hours);
   String minutesStr = String(minutes);
   String secondsStr = String(seconds);
-  String timerstart1Str = String(jamTimer[0][0]);
-  String timerstop1Str = String(jamTimer[0][1]);
-  String timerstart2Str = String(jamTimer[1][0]);
-  String timerstop2Str = String(jamTimer[1][1]);
 
 	if(myBot.getNewMessage(msg)) {
 		if(msg.messageType == CTBotMessageText) {
@@ -212,7 +237,8 @@ void telegramOperation(unsigned long &currentMillis) {
 			} else if (msg.text.equalsIgnoreCase("/Time")) {
 				myBot.sendMessage(msg.sender.id, "Waktu internal: " + hoursStr + ":" + minutesStr + ":" + secondsStr);
 			} else if (msg.text.equalsIgnoreCase("/CheckTime")) {
-				myBot.sendMessage(msg.sender.id, "Waktu Timer #1: " + timerstart1Str + " sampai " + timerstop1Str + " - Waktu Timer #2: " + timerstart2Str + " sampai " + timerstop2Str);
+        getTimesetting(waktu1Awal, waktu2Awal, waktu1Akhir, waktu2Akhir);
+				myBot.sendMessage(msg.sender.id, "Waktu Timer #1: " + String(waktu1Awal) + " sampai " + String(waktu1Akhir) + " - Waktu Timer #2: " + String(waktu2Awal) + " sampai " + String(waktu2Akhir));
         } else {
 				String inputWaktu = msg.text;
 
@@ -226,20 +252,30 @@ void telegramOperation(unsigned long &currentMillis) {
         uint8_t waktu2Awal = inputWaktu.substring(pembatas2+1, inputWaktu.length()).toInt();
         uint8_t waktu2Akhir = inputWaktu.substring(pembatas3+1, inputWaktu.length()).toInt();
 
-        jamTimer[0][0] = waktu1Awal;
-        jamTimer[0][1] = waktu1Akhir;
-        jamTimer[1][0] = waktu2Awal;
-        jamTimer[1][1] = waktu2Akhir;
+        if ((waktu1Awal < waktu1Akhir)||(waktu2Awal < waktu2Akhir)) {
+          File file = LittleFS.open("time.csv", "w");
+					//Write to the file
+					file.print(inputWaktu);
+					delay(1);
+					//Close the file
+					file.close();
+
+					getTimesetting(waktu1Awal, waktu2Awal, waktu1Akhir, waktu2Akhir);
+					myBot.sendMessage(msg.sender.id, "Waktu Timer #1: " + String(waktu1Awal) + " sampai " + String(waktu1Akhir) + " - Waktu Timer #2: " + String(waktu2Awal) + " sampai " + String(waktu2Akhir));
+					myBot.sendMessage(msg.sender.id, "Pengaturan tersimpan, harap mereset perangkat.....");
+        } else {
+          myBot.sendMessage(msg.sender.id, "Error, format waktu tidak valid atau menit ke 2 lebih kecil daripada menit ke 1");
+        }
 			}
 		} else if (msg.messageType == CTBotMessageQuery) {
 			if (msg.callbackQueryData.equals(LIGHT_ON_CALLBACK)) {
 				// pushed "LIGHT ON" button...
-				digitalWrite(saklar, HIGH);
+				digitalWrite(saklar, LOW);
 				// terminate the callback with an alert message
 				myBot.endQuery(msg.callbackQueryID, "Light on", true);
 			} else if (msg.callbackQueryData.equals(LIGHT_OFF_CALLBACK)) {
 				// pushed "LIGHT OFF" button...
-				digitalWrite(saklar, LOW);
+				digitalWrite(saklar, HIGH);
 				// terminate the callback with a popup message
 				myBot.endQuery(msg.callbackQueryID, "Light off", true);
 			}
